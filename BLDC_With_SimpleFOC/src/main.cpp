@@ -9,28 +9,29 @@
 #include <SimpleFOC.h>
 
 /* Motor selection. */
-// #define T_MOTOR_U8
-// #define T_MOTOR_U10II
-#define AK10_9
+// #define AK10_9
+#define QM4208
 
 #define OPENLOOP
-// #define LIMIT_SWITCH
 
 #define BAUDRATE (115200) /* Serial port baudrate. */
 
 /* Motor parameters. */
-#if defined(T_MOTOR_U8)
-#define MOTOR_POLE_PAIRS (21)
-#define MOTOR_PHASE_RESISTANCE (0.137) /* Unit in ohm. */
-#define MOTOR_KV (135)                 /* Unit in rpm/V. */
-#elif defined(T_MOTOR_U10II)
-#define MOTOR_POLE_PAIRS (21)
-#define MOTOR_PHASE_RESISTANCE (0.101) /* Unit in ohm. */
-#define MOTOR_KV (100)                 /* Unit in rpm/V. */
-#elif defined(AK10_9)
+
+#if defined(AK10_9)
 #define MOTOR_POLE_PAIRS (21)
 #define MOTOR_PHASE_RESISTANCE (0.090) /* Unit in ohm. */
 #define MOTOR_KV (100)                 /* Unit in rpm/V. */
+#define PID_P (0.2)
+#define PID_I (20)
+#define PID_D (0)
+#elif defined(QM4208)
+#define MOTOR_POLE_PAIRS (7)
+#define MOTOR_PHASE_RESISTANCE (0.101) /* Unit in ohm. */
+#define MOTOR_KV (380)                 /* Unit in rpm/V. */
+#define PID_P (1)
+#define PID_I (0.0001)
+#define PID_D (0)
 #else
 #error No Motor Selected
 #endif
@@ -45,8 +46,6 @@
 #define OC_ADJ (3)  /* PB0. */
 #define M_OC (4)    /* PB7. */
 #define M_PWM (5)   /* PB6. */
-
-#define LIMIT_SWITCH_PIN (A0) /* PA0. */
 
 /*
  * SPI SCLK: D13 pin (PB3).
@@ -64,8 +63,6 @@
 #define M_OC (PB13) //
 #define M_PWM (PB14)
 
-#define LIMIT_SWITCH_PIN (A0)
-
 /*
  * SPI SCLK: D13 pin.
  * SPI MISO: D12 pin.
@@ -77,18 +74,14 @@
 #endif
 
 /* Power. */
-#define VOLTAGE_SUPPLY (22.2) /* Unit in V. */
-#define CURRENT_LIMIT (7)     /* Unit in A. */
+#define VOLTAGE_SUPPLY (22) /* Unit in V. */
+#define CURRENT_LIMIT (0.1) /* Unit in A. */
 
 #define AS5047P_REG_ANGLECOM (0x3FFF) /* Measured angle with dynamic angle error compensation(DAEC). */
 #define AS5047P_REG_ANGLEUNC (0x3FFE) /* Measured angle without DAEC. */
 #define LIMIT_T0_ZERO_DIFF (9)        /* The diff between limit switch triggered and zero position in Rad. */
 
 HardwareSerial Serial1(USART1);
-
-bool limited = false;
-bool homing = false;
-
 BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
 BLDCDriver3PWM driver = BLDCDriver3PWM(INH_A, INH_B, INH_C, EN_GATE);
 MagneticSensorSPI angleSensor = MagneticSensorSPI(AS5047P_SPI_CS, 14, AS5047P_REG_ANGLECOM);
@@ -158,7 +151,7 @@ void setup()
   /* Configure motor parameters. */
   // motor.phase_resistance = MOTOR_PHASE_RESISTANCE;
   // motor.KV_rating = MOTOR_KV * 1.5f; /* SimpleFOC suggest to set the KV value provided to the library to 50-70% higher than the one given in the datasheet.. */
-  motor.voltage_limit = VOLTAGE_SUPPLY * 0.15;
+
   motor.current_limit = CURRENT_LIMIT;
   // motor.motion_downsample = 5;
 
@@ -167,8 +160,10 @@ void setup()
   motor.torque_controller = TorqueControlType::voltage;
 #ifdef OPENLOOP
   motor.controller = MotionControlType::velocity_openloop;
+  motor.voltage_limit = VOLTAGE_SUPPLY * 0.2;
 #else
   motor.controller = MotionControlType::velocity;
+  motor.voltage_limit = VOLTAGE_SUPPLY;
 #endif
 
   /* Velocity control loop setup. */
@@ -197,57 +192,6 @@ void setup()
 
   Serial.println(motor.target, 3);
 
-#ifdef LIMIT_SWITCH
-  pinMode(LIMIT_SWITCH_PIN, INPUT_PULLDOWN);
-  _delay(10);
-
-  /* Find limit switch triggered position. */
-  homing = true;
-  Serial.printf("Find limit switch... ");
-  motor.controller = MotionControlType::velocity;
-  // motor.velocity_limit = 20; /* Unit in rad/s. */
-  motor.enable();
-  while (digitalRead(LIMIT_SWITCH_PIN) != LOW)
-  {
-    motor.move(12.5);
-    motor.loopFOC(); /* Main FOC algorithm. */
-  }
-
-  /* Limit switch triggered posision finded. */
-  motor.disable();
-  _delay(10);
-
-  /* Update zero position offset. */
-  angleSensor.update();
-  motor.sensor_offset = +angleSensor.getAngle() - LIMIT_T0_ZERO_DIFF;
-
-  /* Move to zero (zero position != limit switch triggered position). */
-  Serial.printf("Go to zero... ");
-  motor.controller = MotionControlType::angle;
-  motor.target = 0;
-  motor.enable();
-  while (1)
-  {
-    angleSensor.update();
-    if (angleSensor.getAngle() - motor.sensor_offset < 0.25) /* 0.1 allowable error. */
-    {
-      break; /* Move done. */
-    }
-
-    motor.move();
-    motor.loopFOC(); /* Main FOC algorithm. */
-  }
-
-  homing = false;  /* Reset flag. */
-  limited = false; /* Reset flag. */
-  Serial.println("Done.");
-
-  /* Configure limit switch interrupt. */
-  // attachInterrupt(LIMIT_SWITCH_PIN, onLimitSwitchTriggered, FALLING);
-  // attachInterrupt(digitalPinToInterrupt(LIMIT_SWITCH_PIN), onLimitSwitchTriggered, FALLING);
-#endif
-  // motor.velocity_limit = 15; /* Unit in rad/s. */
-
   Serial.println("All Ready!");
   _delay(1000);
 }
@@ -258,15 +202,6 @@ void loop()
   motor.move();    /* Motion control. */
 
   command.run();
-
-#ifdef LIMIT_SWITCH
-  if (digitalRead(LIMIT_SWITCH_PIN) == LOW)
-  {
-    motor.disable();
-    limited = true;
-    Serial.println("LST"); /* Limit switch triggered. */
-  }
-#endif
 }
 
 /* DRV8302 specific setup. */
@@ -295,42 +230,4 @@ void drv8302Setup(void)
    */
   pinMode(OC_ADJ, OUTPUT);
   digitalWrite(OC_ADJ, HIGH);
-}
-
-void onLimitSwitchTriggered(void)
-{
-  /* Debounce. */
-  // for (int i = 0; i < 3; i++)
-  // {
-  //   /* Delay. */
-  //   for (unsigned int j = 0; j < 5e4; j++)
-  //   {
-  //     __ASM("nop");
-  //   }
-
-  //   if (digitalRead(LIMIT_SWITCH_PIN) == HIGH)
-  //   {
-  //     return;
-  //   }
-  // }
-
-  if (homing)
-  {
-    return;
-  }
-
-  /* Delay. */
-  for (unsigned int i = 0; i < 5e4; i++)
-  {
-    __ASM("nop");
-  }
-
-  if (digitalRead(LIMIT_SWITCH_PIN) == LOW)
-  {
-    limited = true;
-
-    motor.disable();
-    // limited = true;
-    Serial.println("LST"); /* Limit switch triggered. */
-  }
 }
