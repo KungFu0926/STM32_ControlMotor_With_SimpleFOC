@@ -7,17 +7,16 @@
 
 #include <Arduino.h>
 #include <SimpleFOC.h>
-
-/* Motor selection. */
-// #define AK10_9
-#define QM4208
-
-#define OPENLOOP
-
 #define BAUDRATE (115200) /* Serial port baudrate. */
 
-/* Motor parameters. */
+/* Mode */
+// #define OPENLOOP
 
+/* Motor selection. */
+// #define QM4208
+#define AK10_9
+
+/* Motor parameters and Power  */
 #if defined(AK10_9)
 #define MOTOR_POLE_PAIRS (21)
 #define MOTOR_PHASE_RESISTANCE (0.090) /* Unit in ohm. */
@@ -25,6 +24,11 @@
 #define PID_P (0.2)
 #define PID_I (20)
 #define PID_D (0)
+
+/*Power*/
+#define VOLTAGE_SUPPLY (22) /* Unit in V. */
+#define CURRENT_LIMIT (1)   /* Unit in A. */
+
 #elif defined(QM4208)
 #define MOTOR_POLE_PAIRS (7)
 #define MOTOR_PHASE_RESISTANCE (0.101) /* Unit in ohm. */
@@ -32,6 +36,10 @@
 #define PID_P (1)
 #define PID_I (0.0001)
 #define PID_D (0)
+
+/*Power*/
+#define VOLTAGE_SUPPLY (15)     /* Unit in V. */
+#define CURRENT_LIMIT (0.00005) /* Unit in A. */
 #else
 #error No Motor Selected
 #endif
@@ -46,7 +54,6 @@
 #define OC_ADJ (3)  /* PB0. */
 #define M_OC (4)    /* PB7. */
 #define M_PWM (5)   /* PB6. */
-
 /*
  * SPI SCLK: D13 pin (PB3).
  * SPI MISO: D12 pin (PB4).
@@ -58,28 +65,23 @@
 #define INH_B (5)
 #define INH_C (3)
 
-#define EN_GATE (8) //
-#define OC_ADJ (7)  //
-#define M_OC (PB13) //
+#define EN_GATE (8)
+#define OC_ADJ (7)
+#define M_OC (PB13)
 #define M_PWM (PB14)
-
 /*
  * SPI SCLK: D13 pin.
  * SPI MISO: D12 pin.
  * SPI MOSI: D11 pin.
+ * 黃色線在上CS、CLK、MOSI、MISO、-、+
  */
 #define AS5047P_SPI_CS (10)
 #else
 #error No Board Selected
 #endif
 
-/* Power. */
-#define VOLTAGE_SUPPLY (22) /* Unit in V. */
-#define CURRENT_LIMIT (0.1) /* Unit in A. */
-
 #define AS5047P_REG_ANGLECOM (0x3FFF) /* Measured angle with dynamic angle error compensation(DAEC). */
 #define AS5047P_REG_ANGLEUNC (0x3FFE) /* Measured angle without DAEC. */
-#define LIMIT_T0_ZERO_DIFF (9)        /* The diff between limit switch triggered and zero position in Rad. */
 
 HardwareSerial Serial1(USART1);
 BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
@@ -122,7 +124,6 @@ void onReadAngle(char *)
 #endif
 }
 
-void onLimitSwitchTriggered(void);
 void drv8302Setup(void);
 
 void setup()
@@ -158,19 +159,22 @@ void setup()
   /* Algorithms and controllers setup. */
   motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
   motor.torque_controller = TorqueControlType::voltage;
+
 #ifdef OPENLOOP
+  /* OpenLoop should operate in 10%~20% voltage supply */
   motor.controller = MotionControlType::velocity_openloop;
   motor.voltage_limit = VOLTAGE_SUPPLY * 0.2;
 #else
-  motor.controller = MotionControlType::velocity;
+  motor.controller = MotionControlType::angle;
   motor.voltage_limit = VOLTAGE_SUPPLY;
 #endif
 
   /* Velocity control loop setup. */
-  motor.PID_velocity.P = 0.2;
-  motor.PID_velocity.I = 20;
-  // motor.PID_velocity.D = 0.001;
+  motor.PID_velocity.P = PID_P;
+  motor.PID_velocity.I = PID_I;
+  // motor.PID_velocity.D = PID_D;
   // motor.PID_velocity.output_ramp = 500; /* Unit in volts/s. */
+
   motor.LPF_velocity.Tf = 0.01;
   // motor.velocity_limit = 15; /* Unit in rad/s. */
 
@@ -190,7 +194,7 @@ void setup()
   motor.target = 0;
 #endif
 
-  Serial.println(motor.target, 3);
+  Serial.println(motor.target, 4); // 後面數字代表要輸出到小數點後第幾位
 
   Serial.println("All Ready!");
   _delay(1000);
@@ -200,6 +204,7 @@ void loop()
 {
   motor.loopFOC(); /* Main FOC algorithm. */
   motor.move();    /* Motion control. */
+  // motor.monitor();/* motor moniter */
 
   command.run();
 }
