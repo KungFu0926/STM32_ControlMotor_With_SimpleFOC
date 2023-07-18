@@ -10,11 +10,12 @@
 #define BAUDRATE (115200) /* Serial port baudrate. */
 
 /* Mode */
-// #define OPENLOOP
+#define OPENLOOP
 
 /* Motor selection. */
 // #define QM4208
-#define AK10_9
+// #define AK10_9
+#define MAXON_515458
 
 /* Motor parameters and Power  */
 #if defined(AK10_9)
@@ -38,8 +39,20 @@
 #define PID_D (0)
 
 /*Power*/
-#define VOLTAGE_SUPPLY (15)     /* Unit in V. */
-#define CURRENT_LIMIT (0.00005) /* Unit in A. */
+#define VOLTAGE_SUPPLY (15) /* Unit in V. */
+#define CURRENT_LIMIT (1)   /* Unit in A. */
+
+#elif defined(MAXON_515458)
+#define MOTOR_POLE_PAIRS (11)
+#define MOTOR_PHASE_RESISTANCE (0.216) /* Unit in ohm. */
+#define MOTOR_KV (2720)                /* Unit in rpm/V. */
+#define PID_P (0)
+#define PID_I (0)
+#define PID_D (0)
+
+/*Power*/
+#define VOLTAGE_SUPPLY (24)      /* Unit in V. */
+#define CURRENT_LIMIT (6.39 / 2) /* Unit in A. */
 #else
 #error No Motor Selected
 #endif
@@ -60,6 +73,8 @@
  * SPI MOSI: D11 pin (PB5).
  */
 #define AS5047P_SPI_CS (10) /* PA11. */
+#define bit_resolution (14)
+
 #elif defined(NUCLEO_F446RE) || defined(NUCLEO_F401RE)
 #define INH_A (6)
 #define INH_B (5)
@@ -76,6 +91,26 @@
  * 黃色線在上CS、CLK、MOSI、MISO、-、+
  */
 #define AS5047P_SPI_CS (10)
+#define bit_resolution (14)
+
+#elif defined(ARDUINO_UNO)
+#define INH_A (9)
+#define INH_B (10)
+#define INH_C (11)
+
+#define EN_GATE (8)
+#define OC_ADJ (7)
+#define M_PWM (6)
+#define M_OC (5)
+
+/*
+ * SPI SCLK: D13 pin.
+ * SPI MISO: D12 pin.
+ * SPI MOSI: D11 pin.
+ * 黃色線在上CS、CLK、MOSI、MISO、-、+
+ */
+#define AS5047P_SPI_CS (10)
+#define bit_resolution (10)
 #else
 #error No Board Selected
 #endif
@@ -83,10 +118,10 @@
 #define AS5047P_REG_ANGLECOM (0x3FFF) /* Measured angle with dynamic angle error compensation(DAEC). */
 #define AS5047P_REG_ANGLEUNC (0x3FFE) /* Measured angle without DAEC. */
 
-HardwareSerial Serial1(USART1);
+HardwareSerial Serial1();
 BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
 BLDCDriver3PWM driver = BLDCDriver3PWM(INH_A, INH_B, INH_C, EN_GATE);
-MagneticSensorSPI angleSensor = MagneticSensorSPI(AS5047P_SPI_CS, 14, AS5047P_REG_ANGLECOM);
+MagneticSensorSPI angleSensor = MagneticSensorSPI(AS5047P_SPI_CS, bit_resolution, AS5047P_REG_ANGLECOM);
 
 Commander command = Commander(Serial);
 void onMotor(char *cmd) { command.motor(&motor, cmd); }
@@ -204,7 +239,7 @@ void loop()
 {
   motor.loopFOC(); /* Main FOC algorithm. */
   motor.move();    /* Motion control. */
-  // motor.monitor();/* motor moniter */
+                   // motor.monitor();/* motor moniter */
 
   command.run();
 }
